@@ -1,0 +1,29 @@
+id: homebot-home-assistant
+resource_version: 1
+display_name: Home Assistant MCP (Homebot)
+description: >-
+  Long-lived token of the non-admin HA user `homebot`. Bound to HA's official MCP endpoint only, which
+  itself only shows entities exposed to Assist.
+category: agent
+credentials:
+  - name: ha_token
+    description: HA long-lived access token of user `homebot` (secret name HOMEBOT_HA_TOKEN)
+    env_vars:
+      - HOMEBOT_HA_TOKEN
+    required: true
+    auth_style: bearer
+    header_name: authorization
+    query_param: ""
+endpoints:
+  - host: homeserver.tailnet.example
+    port: 8123
+    protocol: rest
+    enforcement: enforce
+    allowed_ips: [198.51.100.19/32]     # the HA host's address; private IPs are refused otherwise
+    rules:
+      - allow: { method: POST, path: /api/mcp }
+binaries:
+  - /usr/local/bin/claude
+inference_capable: false
+source: user
+scope: workspace

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "home-assistant": {
+      "type": "http",
+      "url": "https://homeserver.tailnet.example:8123/api/mcp",
+      "headers": { "Authorization": "Bearer ${HOMEBOT_HA_TOKEN}" }
+    }
+  }
+}

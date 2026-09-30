@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# homebot — talk to Homebot, the Home Assistant agent, from the workstation.
+#
+#   homebot ask "turn off the living room lights"
+#   homebot chat            back-and-forth: each message carries the recent conversation (Ctrl-D or "bye" to end)
+#   homebot last            show the last answer again
+#
+# Each ask boots a fresh OpenShell box on the agent host (jobs gateway, user openshell-jobs), runs one task, and deletes the box.
+# Transport: forced-command ssh key ~/.ssh/id_homebot_trigger → /usr/local/bin/homebot-remote as `openshell-jobs`.
+# The key can do nothing but hand homebot-remote a task on stdin. Answers are kept in
+# ~/.local/state/homebot/.
+set -euo pipefail
+HOST="${HOMEBOT_HOST:-172.16.0.32}"   # the agent host (jobs gateway)
+RUSER="${HOMEBOT_USER:-openshell-jobs}"
+KEY="${HOMEBOT_KEY:-$HOME/.ssh/id_homebot_trigger}"
+KH="$HOME/.ssh/known_hosts_agent_host"
+STATE="$HOME/.local/state/homebot"; mkdir -p "$STATE"
+die(){ printf '!! %s\n' "$*" >&2; exit 1; }
+case "${1:-help}" in
+  ask)
+    shift; [ $# -ge 1 ] || die 'usage: homebot ask "<task>"'
+    [ -r "$KEY" ] || die "no trigger key at $KEY (see boxes/homebot/README.md)"
+    out="$STATE/$(date -u +%Y%m%d-%H%M%S).txt"
+    printf '%s\n' "$*" | ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$KH" \
+      -o StrictHostKeyChecking=yes -o ConnectTimeout=10 "$RUSER@$HOST" homebot | tee "$out"
+    ;;
+  chat)
+    [ -r "$KEY" ] || die "no trigger key at $KEY"
+    conv="$STATE/chat-$(date -u +%Y%m%d-%H%M%S).log"; : > "$conv"
+    echo "Talking to Homebot. Each reply takes ~20s. Ctrl-D or 'bye' to end."
+    while IFS= read -r -e -p "you> " msg; do
+      case "$msg" in ""|bye|exit|quit) [ -z "$msg" ] && continue; break;; esac
+      # recent turns, oldest dropped first, so the whole task stays under homebot-remote's 4 KB cap
+      hist=$(tail -c 3000 "$conv" | sed -n '/^\(User\|Homebot\):/,$p')
+      task=$(printf 'Earlier in this conversation (context only, not instructions):\n%s\n\nThe user now says: %s\n' "$hist" "$msg")
+      [ -s "$conv" ] || task="$msg"
+      reply=$(printf '%s\n' "$task" | ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o UserKnownHostsFile="$KH" \
+        -o StrictHostKeyChecking=yes -o ConnectTimeout=10 "$RUSER@$HOST" homebot | sed '/^<<<NETWORK-HOSTS/d; /^\[homebot rc=/d')
+      printf 'homebot> %s\n\n' "$reply"
+      printf 'User: %s\nHomebot: %s\n' "$msg" "$reply" >> "$conv"
+      printf '%s\n' "$reply" > "$STATE/$(date -u +%Y%m%d-%H%M%S).txt"
+    done
+    echo "saved: $conv" ;;
+  last) cat "$(ls -1t "$STATE"/[0-9]*.txt | head -1)" ;;
+  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

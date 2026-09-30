@@ -1,0 +1,14 @@
+# OpenShell sandbox policy for Homebot, the Home Assistant agent (2026-09-30).
+#
+# No network_policies of its own: the only two doors come from the attached providers.
+#   homebot-claude (profile claude-code-oauth)  -> api.anthropic.com, 5 fixed requests, Homebot's own token
+#   homebot-ha     (profile homebot-home-assistant) -> homeserver:8123, POST /api/mcp only, Homebot's HA token
+# Everything else is denied, including HA's /api/services, /api/states and /api/websocket.
+version: 1
+filesystem_policy:
+  include_workdir: true
+  read_only: [/bin, /usr, /lib, /proc, /dev/urandom, /etc, /var/log, /opt/homebot]
+  read_write: [/tmp, /dev/null]
+landlock:
+  compatibility: best_effort
+network_policies: {}

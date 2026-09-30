@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Box half of Homebot (Home Assistant agent), on the agent host's jobs gateway. Forced command for the
+workstation's Homebot trigger key.
+
+  stdin   the user's task, plain text (max 4 KB; empty = refusal, no box)
+  stdout  Homebot's answer, then one trailer line: <<<NETWORK-HOSTS allowed=a,b denied=c>>>
+  exit    0 = box ran, 2 = bad input, 3 = busy, 1 = box failed
+
+Installed as /usr/local/bin/homebot-remote, run as the jobs gateway's user (`openshell-jobs`) via
+  restrict,from="172.16.0.54",command="/usr/local/bin/homebot-remote" ssh-ed25519 ...
+Fresh box per task, deleted on every exit path, run record kept.
+"""
+from __future__ import annotations
+
+import fcntl
+import os
+import pwd
+import re
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)   # /var/lib/openshell-jobs on the agent host
+BASE = HOME / "homebot"
+RUNS = BASE / "runs"
+IMAGE = HOME / "images/homebot-agent_0.1.tar"
+POLICY = BASE / "policy.yaml"
+PROVIDERS = ("homebot-claude", "homebot-ha")
+MAX_TASK = 4096
+BOX_TIMEOUT = 300           # seconds for one Homebot task
+KEEP_RUNS = 50
+
+# MCP tools only: no built-in tools at all (no Bash, no files, no web). Skill appended to the prompt.
+INNER = r'''
+export HOME=/tmp DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+echo "<<<HOMEBOT-BEGIN>>>"
+claude -p --tools "" --mcp-config /opt/homebot/mcp.json --strict-mcp-config \
+  --allowedTools "mcp__home-assistant" --append-system-prompt-file /opt/homebot/SKILL.md \
+  --output-format text < /sandbox/task.txt
+echo "<<<HOMEBOT-END rc=$?>>>"
+'''
+
+
+class Hangup(Exception):
+    pass
+
+
+def on_signal(signum, _frame):
+    raise Hangup(signal.Signals(signum).name)
+
+
+def watch_disconnect() -> None:
+    """sshd sends no SIGHUP to a non-pty forced command; poll stdout for HUP instead."""
+    p = select.poll()
+    p.register(sys.stdout.fileno(), 0)
+    while True:
+        if any(ev & (select.POLLHUP | select.POLLERR | select.POLLNVAL) for _, ev in p.poll(5000)):
+            os.kill(os.getpid(), signal.SIGHUP)
+            return
+
+
+def emit(text: str) -> None:
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError):
+        pass
+
+
+def scrub(text: str) -> str:
+    text = re.sub(r"sk-ant-[A-Za-z0-9_-]+", "<scrubbed>", text)
+    return re.sub(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+", "<scrubbed-jwt>", text)
+
+
+def osh(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+    return subprocess.run(["openshell", *args], capture_output=True, text=True, timeout=timeout,
+                          start_new_session=True, cwd=HOME)
+
+
+def sweep_stale() -> None:
+    r = osh("sandbox", "list")
+    for name in re.findall(r"(?m)^\s*(homebot-\d{6}-\d{6})\b", r.stdout):
+        osh("sandbox", "delete", name)
+
+
+def hosts(log: str) -> str:
+    allowed = sorted(set(re.findall(r"NET:OPEN \[\w+\] ALLOWED (?:\S+ -> )?([^\s:]+):\d+", log)))
+    denied = sorted(set(re.findall(r"NET:OPEN \[\w+\] DENIED (?:\S+ -> )?([^\s:]+):\d+", log)))
+    return f"<<<NETWORK-HOSTS allowed={','.join(allowed)} denied={','.join(denied)}>>>\n"
+
+
+def prune() -> None:
+    runs = sorted(p for p in RUNS.iterdir() if p.is_dir())
+    for p in runs[:-KEEP_RUNS]:
+        shutil.rmtree(p, ignore_errors=True)
+
+
+def main() -> int:
+    for s in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT, signal.SIGPIPE):
+        signal.signal(s, on_signal)
+    RUNS.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    run = RUNS / ts
+    run.mkdir(mode=0o700)
+    (run / "meta.txt").write_text(f"ssh_original_command_ignored={os.environ.get('SSH_ORIGINAL_COMMAND', '')!r}\n"
+                                  f"client={os.environ.get('SSH_CLIENT', '')}\n")
+
+    task = sys.stdin.buffer.read(MAX_TASK + 1)
+    try:
+        text = task.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        text = ""
+    if not text or len(task) > MAX_TASK or "\x00" in text:
+        (run / "result.txt").write_text("REFUSED: empty, binary or over 4 KB\n")
+        emit("homebot-remote: task must be 1 byte to 4 KB of text, nothing run\n")
+        return 2
+
+    lock = open(BASE / ".lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        (run / "result.txt").write_text("REFUSED: another Homebot task is running\n")
+        emit("homebot-remote: Homebot is busy with another task\n")
+        return 3
+
+    (run / "task.txt").write_text(text + "\n")
+    threading.Thread(target=watch_disconnect, daemon=True).start()
+    sweep_stale()
+    name = f"homebot-{ts[2:]}"                    # homebot-YYMMDD-HHMMSS = 18; OpenShell caps names at 19
+    out, rc = "", 1
+    try:
+        prov = [a for p in PROVIDERS for a in ("--provider", p)]
+        c = osh("sandbox", "create", "--name", name, "--from", str(IMAGE), "--no-tty", "--no-auto-providers",
+                *prov, "--policy", str(POLICY), "--approval-mode", "manual",
+                "--upload", f"{run / 'task.txt'}:/sandbox/task.txt", "--no-git-ignore", "--detach",
+                timeout=600)
+        out = "[create]\n" + c.stdout + c.stderr
+        if c.returncode == 0:
+            r = osh("sandbox", "exec", "-n", name, "--no-tty", "--no-login-shell", "--timeout", str(BOX_TIMEOUT),
+                    "--", "bash", "-c", INNER, timeout=BOX_TIMEOUT + 60)
+            out += "\n[exec]\n" + r.stdout + ("\n[stderr]\n" + r.stderr if r.stderr.strip() else "")
+            rc = 0
+    except subprocess.TimeoutExpired:
+        out += f"\n[remote] box timed out after {BOX_TIMEOUT}s"
+    except Hangup as e:
+        out += f"\n[remote] interrupted by {e}; box deleted"
+    finally:
+        for s in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT, signal.SIGPIPE):
+            signal.signal(s, signal.SIG_IGN)
+        log = ""
+        try:
+            lg = osh("logs", name, "--since", "30m", "--source", "sandbox")
+            log = scrub(lg.stdout + lg.stderr)
+        except Exception as e:  # noqa: BLE001 — never skip the delete
+            log = f"[remote] log fetch failed: {e}"
+        (run / "network.log").write_text(log)
+        osh("sandbox", "delete", name)
+        (run / "box-output.log").write_text(scrub(out))
+        (run / "result.txt").write_text(f"box rc={rc}\n")
+        prune()
+    m = re.search(r"<<<HOMEBOT-BEGIN>>>\n(.*?)<<<HOMEBOT-END rc=(\d+)>>>", out, re.S)
+    emit((m.group(1).strip() + f"\n[homebot rc={m.group(2)}]\n") if m else scrub(out) + "\n")
+    emit(hosts(log))
+    return 0 if rc == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

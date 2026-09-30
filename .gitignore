@@ -1,0 +1,18 @@
+# Secret files - never commit 
+.env
+*.env
+!*.env.example
+*.key
+*.pem
+*.crt
+*-identity
+id_*
+*.gpg
+secrets.env
+*.log
+.DS_Store
+build/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+target/
