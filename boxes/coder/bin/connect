@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# The operator's line: an interactive shell inside the box `coder` (needs a real terminal).
+# Used for the things only the operator does in the box: `claude` then /login, the folder-trust prompt,
+# the one-time Remote Control prompt. Leave with `exit`; the box keeps running.
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+. "$HERE/bin/lib.sh"
+exec ssh -t "${SSH_OPTS[@]}" "$AGENT_HOST" "sudo -u openshell -H sh -c 'cd && exec openshell sandbox exec -n coder --tty --timeout 0 --workdir /home/coder/work -- bash -l'"

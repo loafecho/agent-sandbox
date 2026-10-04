@@ -1,0 +1,125 @@
+# Policy for the long-lived box `coder`. THIS FILE IS THE RECORD of what the live box allows.
+# File rules are fixed at creation; network rules change live (door.sh, or an approved pending rule).
+# After any live change, re-capture with bin/drift-check.sh --capture and commit, so the git log is the
+# record of every door that was opened. `_provider_*` blocks are left out: the gateway builds them from the attached
+# providers (openshell/providers.tsv). bin/drift-check.sh fails if this file and the live box differ.
+# Example record: the door names and hosts below are a representative set, not a capture of a real box.
+version: 1
+filesystem_policy:
+  include_workdir: true
+  read_only:
+  - /bin
+  - /sbin
+  - /usr
+  - /lib
+  - /lib64
+  - /etc
+  - /opt
+  - /proc
+  - /sys
+  - /var/log
+  - /dev/urandom
+  - /dev/random
+  - /dev/zero
+  read_write:
+  - /home/coder
+  - /tmp
+  - /var/tmp
+  - /dev/null
+  - /dev/tty
+  - /dev/ptmx
+  - /dev/pts
+  - /dev/shm
+landlock:
+  compatibility: best_effort
+network_policies:
+  allow_docs_nvidia_com_443:
+    name: allow_docs_nvidia_com_443
+    endpoints:
+    - host: docs.nvidia.com
+      port: 443
+    binaries:
+    - path: /usr/bin/curl
+  allow_example_site_pages_dev_443:
+    name: allow_example_site_pages_dev_443
+    endpoints:
+    - host: example-site.pages.dev
+      port: 443
+    binaries:
+    - path: /usr/bin/curl
+  allow_pypi_org_443:
+    name: allow_pypi_org_443
+    endpoints:
+    - host: pypi.org
+      port: 443
+    binaries:
+    - path: /usr/bin/python3.12
+  allow_raw_githubusercontent_com_443:
+    name: allow_raw_githubusercontent_com_443
+    endpoints:
+    - host: raw.githubusercontent.com
+      port: 443
+    binaries:
+    - path: /usr/bin/curl
+  allow_registry_npmjs_org_443:
+    name: allow_registry_npmjs_org_443
+    endpoints:
+    - host: registry.npmjs.org
+      port: 443
+      protocol: rest
+      enforcement: enforce
+      rules:
+      - allow:
+          method: GET
+          path: '**'
+      - allow:
+          method: HEAD
+          path: '**'
+      allow_encoded_slash: true
+    binaries:
+    - path: /usr/bin/node
+  claude_api:
+    name: claude_api
+    endpoints:
+    - host: api.anthropic.com
+      port: 443
+      protocol: rest
+      enforcement: audit
+      access: full
+    binaries:
+    - path: /usr/local/bin/claude
+  claude_login:
+    name: claude_login
+    endpoints:
+    - host: platform.claude.com
+      port: 443
+      protocol: rest
+      enforcement: audit
+      access: full
+    binaries:
+    - path: /usr/local/bin/claude
+  git_remote_http_github:
+    name: git_remote_http_github
+    endpoints:
+    - host: github.com
+      port: 443
+      protocol: rest
+      enforcement: enforce
+      rules:
+      - allow:
+          method: GET
+          path: '**'
+      - allow:
+          method: HEAD
+          path: '**'
+      - allow:
+          method: OPTIONS
+          path: '**'
+      - allow:
+          method: POST
+          path: /**/git-upload-pack
+      - allow:
+          method: POST
+          path: /example-org/example-site.git/git-receive-pack
+    binaries:
+    - path: /usr/lib/git-core/git-remote-http

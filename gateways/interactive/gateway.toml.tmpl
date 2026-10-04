@@ -1,0 +1,15 @@
+# Rendered by gateway-setup.sh: @UID@/@GID@ become `id -u/-g openshell` on the agent host.
+# A mismatch breaks every box with "read /proc/self/status: Permission denied".
+[openshell]
+version = 2
+
+[openshell.drivers.vm]
+allow_driver_config = true
+# 8 GiB: the coder image carries node, bun, python, ffmpeg (job images stay under 2 GiB).
+rootfs_tar_max_bytes = 8589934592
+# One box at a time on a 16 GB VM. Driver defaults are 2 vcpus, 2048 MiB, 4096 MiB (docs at v0.1.1).
+vcpus = 4
+mem_mib = 8192
+overlay_disk_mib = 40960
+sandbox_uid = @UID@
+sandbox_gid = @GID@

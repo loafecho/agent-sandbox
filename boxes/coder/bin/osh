@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# `openshell ...` on agent-host as the openshell user. Example: bin/osh sandbox list
+# Read commands are safe. Anything that changes a rule, a provider or a box is the operator's call.
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+. "$HERE/bin/lib.sh"
+osh "$@"

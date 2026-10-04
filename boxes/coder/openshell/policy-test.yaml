@@ -1,0 +1,15 @@
+# Throwaway test box for the B1 proofs. Same file rules as the real box, plus ONE open door so the
+# standing check has a positive control: curl may read api.github.com (GET only, no credential).
+version: 1
+filesystem_policy:
+  include_workdir: true
+  read_only: [/bin, /sbin, /usr, /lib, /lib64, /etc, /opt, /proc, /sys, /var/log, /dev/urandom, /dev/random, /dev/zero]
+  read_write: [/home/coder, /tmp, /var/tmp, /dev/null, /dev/tty, /dev/ptmx, /dev/pts, /dev/shm]
+landlock:
+  compatibility: best_effort
+network_policies:
+  control_github_read_only:
+    endpoints:
+      - { host: api.github.com, port: 443, protocol: rest, enforcement: enforce, access: read-only }
+    binaries:
+      - path: /usr/bin/curl

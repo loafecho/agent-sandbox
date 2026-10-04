@@ -1,0 +1,8 @@
+# Doors for the box `coder`. One row per door: name, program inside the box, one endpoint
+# (host:port:access:protocol:enforcement). `audit` = log and allow, used for the first week so the log
+# gives the real request list; then the row is tightened to `enforce` with explicit rules.
+# A door is opened only after the operator approved it by name; the commit that adds it is the record.
+# openshell/policy.yaml is the record of every live door (including ones approved from a pending rule);
+# after opening one, run bin/drift-check.sh --capture and commit.
+claude_api	/usr/local/bin/claude	api.anthropic.com:443:full:rest:audit
+claude_login	/usr/local/bin/claude	platform.claude.com:443:full:rest:audit

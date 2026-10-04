@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# The operator's line for B3 (run it in a real terminal on the admin workstation, not from an agent).
+# Running it is the approval for two doors, both Anthropic's own hosts, for the program
+# /usr/local/bin/claude only, in log-and-allow mode:
+#   claude_api    api.anthropic.com:443     (model requests, Remote Control)
+#   claude_login  platform.claude.com:443   (the sign-in token exchange)
+# Then it starts Claude Code inside the box, in the work folder (`sandbox connect` only attaches read-only
+# to the box's main process, so this uses `sandbox exec --tty`). There:
+#   answer the folder-trust prompt, then /login, then /exit
+# The login stays in the box as a plain file. Nothing else is opened.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+. "$HERE/bin/lib.sh"
+LOG="$OUT/login.log"
+{
+  echo "run $(date -u +%FT%TZ) by $(id -un) tty=$(tty 2>/dev/null || echo none)"
+  "$HERE/bin/door.sh" claude_api --yes-write </dev/null | tail -2
+  "$HERE/bin/door.sh" claude_login --yes-write </dev/null | tail -2
+} 2>&1 | tee -a "$LOG"
+echo
+echo "Claude Code is starting inside the box, in the work folder. Accept the folder trust prompt, then /login, then /exit."
+echo
+ssh -t "${SSH_OPTS[@]}" "$AGENT_HOST" "sudo -u openshell -H sh -c 'cd && exec openshell sandbox exec -n coder --tty --timeout 0 --workdir /home/coder/work -- bash -lc claude'" || true
+# Result for the agent, without any secret: does a login file exist, and does a model call work?
+{
+  box coder 'test -s ~/.claude/.credentials.json && echo "login file: present" || echo "login file: missing"; cd ~/work && timeout 60 claude -p "Reply with the single word OK" 2>&1 | tail -1' 120
+  echo "done $(date -u +%FT%TZ)"
+} 2>&1 | tee -a "$LOG"

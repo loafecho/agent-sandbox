@@ -1,0 +1,18 @@
+# User unit for the `openshell` user on agent-host. Only installed if B2 proof 3 shows the box
+# does not come back by itself after a VM reboot. Starts the stopped box `coder` once the gateway is up.
+[Unit]
+Description=Start the long-lived OpenShell box coder
+After=openshell-gateway.service
+Requires=openshell-gateway.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sleep 10
+ExecStart=/usr/bin/openshell sandbox start coder
+TimeoutStartSec=900
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
