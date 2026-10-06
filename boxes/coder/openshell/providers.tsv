@@ -1,0 +1,8 @@
+# Providers (credentials held by the gateway) for boxes on agent-host. One row per provider.
+# The VALUE lives only in Infisical; this file names where it comes from. Never put a value here.
+# bin/set-provider.sh NAME loads Infisical -> gateway; bin/drift-check.sh checks gateway == this file.
+# infisical_project: TBD-your-project-id
+# provider	type(profile id)	env var in the box	Infisical secret (env prod)	box
+coder-github	github	GITHUB_TOKEN	GITHUB_TOKEN	coder
+coder-cloudflare	cloudflare	CLOUDFLARE_API_TOKEN	CLOUDFLARE_API_TOKEN	coder
+coder-switchboard	coder-switchboard	SWITCHBOARD_TOKEN	SWITCHBOARD_TOKEN	coder

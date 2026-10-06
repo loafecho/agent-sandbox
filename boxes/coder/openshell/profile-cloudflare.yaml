@@ -1,0 +1,45 @@
+id: cloudflare
+resource_version: 1
+display_name: Cloudflare
+description: Cloudflare API (Pages), scoped to the example-site project for writes
+category: other
+credentials:
+  - name: api_token
+    description: Cloudflare API token (Account / Cloudflare Pages / Edit)
+    env_vars:
+      - CLOUDFLARE_API_TOKEN
+    required: true
+    auth_style: bearer
+    header_name: authorization
+    query_param: ""
+endpoints:
+  - host: api.cloudflare.com
+    port: 443
+    protocol: rest
+    enforcement: enforce
+    rules:
+      - allow:
+          method: GET
+          path: "**"
+      - allow:
+          method: HEAD
+          path: "**"
+      - allow:
+          method: POST
+          path: /client/v4/accounts/*/pages/projects/example-site/**
+      - allow:
+          method: PATCH
+          path: /client/v4/accounts/*/pages/projects/example-site
+      - allow:
+          method: PATCH
+          path: /client/v4/accounts/*/pages/projects/example-site/**
+      - allow:
+          method: DELETE
+          path: /client/v4/accounts/*/pages/projects/example-site/deployments/*
+binaries:
+  - /usr/bin/node
+  - /usr/bin/curl
+inference_capable: false
+discovery:
+  credentials:
+    - api_token
