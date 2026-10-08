@@ -1,0 +1,34 @@
+#!/usr/sbin/nft -f
+# Agent-host egress wall keyed by uid. Rendered by install-jobs-wall.sh (the @NAME@ fields come from its
+# environment); do not load this template directly.
+# OpenShell box egress leaves the host as sockets owned by the gateway's user (verified with ss -tnpe),
+# so `meta skuid` separates the interactive box (uid openshell) from the job boxes (uid openshell-jobs).
+# Separate table, NO flush ruleset: tailscaled's own chains must survive. Idempotent (delete + recreate).
+table inet jobs_wall
+delete table inet jobs_wall
+
+define HA = @HA@
+define SWITCHBOARD = @SWITCHBOARD@
+define LAN_DNS = { @LAN_DNS@ }
+define PRIVATE4 = { @PRIVATE4@ }
+define PRIVATE6 = { fc00::/7, fe80::/10 }
+
+table inet jobs_wall {
+  chain output {
+    type filter hook output priority 0; policy accept;
+
+    # --- job boxes (one fresh microVM per task) ---
+    meta skuid "openshell-jobs" ip daddr 127.0.0.1 tcp dport 17670 reject with tcp reset   # never the interactive gateway
+    meta skuid "openshell-jobs" oif lo accept
+    meta skuid "openshell-jobs" ip daddr $LAN_DNS meta l4proto { tcp, udp } th dport 53 accept
+    meta skuid "openshell-jobs" ip daddr $HA tcp dport 8123 accept                             # homebot -> Home Assistant
+    meta skuid "openshell-jobs" ip daddr $SWITCHBOARD tcp dport 8800 accept                    # job boxes -> switchboard
+    meta skuid "openshell-jobs" ip daddr $PRIVATE4 reject
+    meta skuid "openshell-jobs" ip6 daddr $PRIVATE6 reject
+    # everything else from the jobs uid (the public internet) falls through to accept
+
+    # --- the interactive box (gateway user openshell): the jobs' doors stay shut to it ---
+    meta skuid "openshell" ip daddr 127.0.0.1 tcp dport 17680 reject with tcp reset          # the jobs gateway
+    meta skuid "openshell" ip daddr $HA tcp dport 8123 reject
+  }
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Agent-host uid-keyed egress wall for OpenShell job boxes (table inet jobs_wall)
+After=network-pre.target
+Before=network-online.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/jobs-wall.nft
+ExecStop=/usr/sbin/nft delete table inet jobs_wall
+
+[Install]
+WantedBy=multi-user.target

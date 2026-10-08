@@ -1,0 +1,5 @@
+# Providers on the jobs gateway (user openshell-jobs on the agent host). One row per provider. Names only, never a value.
+# bin/drift-check.sh checks the live provider list == this file. Loader: boxes/homebot/bin/set-homebot-tokens.sh.
+# provider	type(profile id)	box
+homebot-ha	homebot-home-assistant	homebot
+homebot-claude	claude-code-oauth	homebot
