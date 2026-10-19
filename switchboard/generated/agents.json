@@ -1,0 +1,116 @@
+{
+ "_generated": "switchboard/gen.py from tools.yaml",
+ "agents": {
+  "coder": {
+   "rate_per_min": 30,
+   "tools": [
+    "guest_list",
+    "host_health",
+    "jellyfin_library_counts",
+    "jellyfin_library_scan",
+    "jellyfin_sessions",
+    "pve_guest_power",
+    "pve_node_status",
+    "pve_recent_tasks",
+    "request_status",
+    "services_up"
+   ]
+  }
+ },
+ "backends": {},
+ "power_vmids": [
+  "102",
+  "103",
+  "112",
+  "113",
+  "120",
+  "121",
+  "130"
+ ],
+ "tools": {
+  "guest_list": {
+   "args": {},
+   "description": "Every Proxmox VM and container on the hypervisor: vmid, name, kind, running or stopped, max memory. From Prometheus, so up to ~15 s old.",
+   "tier": "read"
+  },
+  "host_health": {
+   "args": {
+    "host": {
+     "description": "Host name as Prometheus labels it, e.g. pve1",
+     "pattern": "^[a-z0-9-]{1,32}$",
+     "required": true,
+     "type": "string"
+    }
+   },
+   "description": "CPU busy %, memory and root-disk space for one host, from Prometheus node metrics.",
+   "tier": "read"
+  },
+  "jellyfin_library_counts": {
+   "args": {},
+   "description": "How many movies, series, episodes, songs, albums etc. are in Jellyfin.",
+   "tier": "read"
+  },
+  "jellyfin_library_scan": {
+   "args": {},
+   "description": "Start a Jellyfin library scan (picks up new or removed media). Never runs straight away: it posts a request to the approver in Discord and returns a request id; it runs only if the approver approves within 30 minutes. Check with request_status.",
+   "tier": "approve"
+  },
+  "jellyfin_sessions": {
+   "args": {},
+   "description": "Who is on Jellyfin in the last 16 minutes: user, app, device name, and what is playing (paused or not). IPs and device ids are dropped.",
+   "tier": "read"
+  },
+  "pve_guest_power": {
+   "args": {
+    "action": {
+     "description": "start, shutdown or reboot",
+     "pattern": "^(start|shutdown|reboot)$",
+     "required": true,
+     "type": "string"
+    },
+    "vmid": {
+     "description": "Guest id, e.g. 103",
+     "pattern": "^[0-9]{3,4}$",
+     "required": true,
+     "type": "string"
+    }
+   },
+   "description": "Start, shut down (clean ACPI shutdown) or reboot one Proxmox guest. Never runs straight away: it posts a request to the approver in Discord and returns a request id; it runs only if the approver approves within 30 minutes. Check with request_status. Only allowlisted guests; the workstation, secrets vault, agent host and the switchboard never are.",
+   "tier": "approve"
+  },
+  "pve_node_status": {
+   "args": {},
+   "description": "The Proxmox host right now: uptime, CPU busy %, load, memory, swap, root disk, Proxmox and kernel versions. Live from the Proxmox API.",
+   "tier": "read"
+  },
+  "pve_recent_tasks": {
+   "args": {
+    "limit": {
+     "description": "How many tasks, 1-50 (default 10)",
+     "pattern": "^([1-9]|[1-4][0-9]|50)$",
+     "required": false,
+     "type": "string"
+    }
+   },
+   "description": "The Proxmox host's most recent tasks, newest first: type, guest id, user, status, start and end time (unix seconds). Backups, VM starts, apt updates.",
+   "tier": "read"
+  },
+  "request_status": {
+   "args": {
+    "id": {
+     "description": "The request id an approve tool returned, e.g. r-0123456789ab",
+     "pattern": "^r-[0-9a-f]{12}$",
+     "required": true,
+     "type": "string"
+    }
+   },
+   "description": "Status of one of your approval requests: pending, executed, failed, denied or expired, with the result once it ran.",
+   "tier": "read"
+  },
+  "services_up": {
+   "args": {},
+   "description": "Every target Prometheus scrapes, with up or down. A quick view of what is broken.",
+   "tier": "read"
+  }
+ }
+}

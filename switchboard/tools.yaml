@@ -1,0 +1,108 @@
+# THE single source of truth for the switchboard: every tool, its tier, and which agents may call it.
+# Edit this file, run `python3 gen.py`, commit the generated files. Never hand-edit generated output.
+# `python3 gen.py --check` fails when a generated file no longer matches this one (CI runs it).
+#
+# Tiers:
+#   read     runs on its own and is logged.
+#   approve  never runs straight away: posts a request to a Discord approvals channel (and, when configured, a phone
+#            push linking to the passkey approval page); runs only after the approver's own ✅ or passkey, first wins.
+#   forward  an `upstreams` tool: passed on unchanged to the agent's own MCP gateway, which keeps every guard of its own.
+#            No upstream is configured in this example; the forward tier is covered by the unit tests in src/mcp.rs.
+# backend: prometheus (default, no key) | pve | jellyfin | approvals. Keys live only on the switchboard host; see TOOLS.md.
+
+switchboard:
+  host: 172.16.0.33          # the switchboard VM (VM 160 in the examples)
+  port: 8800
+  mcp_versions: ["2025-06-18", "2025-03-26"]
+
+# Guests pve_guest_power may act on. The Proxmox power token's ACLs are minted for exactly these guests.
+# 100 workstation, 101 secrets vault, 150 agent host and 160 the switchboard may never be listed: losing any of them
+# cuts the approval path (gen.py and the switchboard's own config check both refuse them).
+power_vmids: ["102", "103", "112", "113", "120", "121", "130"]
+
+agents:
+  coder:
+    box: coder
+    provider: coder-switchboard
+    env_var: SWITCHBOARD_TOKEN          # the box only ever sees OpenShell's placeholder for it
+    secret_name: SWITCHBOARD_TOKEN      # name in the box's secrets-manager project; the value never enters the repo
+    binary: /usr/local/bin/claude
+    rate_per_min: 30
+
+tools:
+  host_health:
+    tier: read
+    agents: [coder]
+    description: "CPU busy %, memory and root-disk space for one host, from Prometheus node metrics."
+    args:
+      host:
+        type: string
+        pattern: "^[a-z0-9-]{1,32}$"
+        required: true
+        description: "Host name as Prometheus labels it, e.g. pve1"
+  guest_list:
+    tier: read
+    agents: [coder]
+    description: "Every Proxmox VM and container on the hypervisor: vmid, name, kind, running or stopped, max memory. From Prometheus, so up to ~15 s old."
+  services_up:
+    tier: read
+    agents: [coder]
+    description: "Every target Prometheus scrapes, with up or down. A quick view of what is broken."
+  pve_node_status:
+    tier: read
+    agents: [coder]
+    backend: pve
+    description: "The Proxmox host right now: uptime, CPU busy %, load, memory, swap, root disk, Proxmox and kernel versions. Live from the Proxmox API."
+  pve_recent_tasks:
+    tier: read
+    agents: [coder]
+    backend: pve
+    description: "The Proxmox host's most recent tasks, newest first: type, guest id, user, status, start and end time (unix seconds). Backups, VM starts, apt updates."
+    args:
+      limit:
+        type: string
+        pattern: "^([1-9]|[1-4][0-9]|50)$"
+        required: false
+        description: "How many tasks, 1-50 (default 10)"
+  jellyfin_library_counts:
+    tier: read
+    agents: [coder]
+    backend: jellyfin
+    description: "How many movies, series, episodes, songs, albums etc. are in Jellyfin."
+  jellyfin_sessions:
+    tier: read
+    agents: [coder]
+    backend: jellyfin
+    description: "Who is on Jellyfin in the last 16 minutes: user, app, device name, and what is playing (paused or not). IPs and device ids are dropped."
+  pve_guest_power:
+    tier: approve
+    agents: [coder]
+    backend: pve
+    description: "Start, shut down (clean ACPI shutdown) or reboot one Proxmox guest. Never runs straight away: it posts a request to the approver in Discord and returns a request id; it runs only if the approver approves within 30 minutes. Check with request_status. Only allowlisted guests; the workstation, secrets vault, agent host and the switchboard never are."
+    args:
+      vmid:
+        type: string
+        pattern: "^[0-9]{3,4}$"
+        required: true
+        description: "Guest id, e.g. 103"
+      action:
+        type: string
+        pattern: "^(start|shutdown|reboot)$"
+        required: true
+        description: "start, shutdown or reboot"
+  jellyfin_library_scan:
+    tier: approve
+    agents: [coder]
+    backend: jellyfin
+    description: "Start a Jellyfin library scan (picks up new or removed media). Never runs straight away: it posts a request to the approver in Discord and returns a request id; it runs only if the approver approves within 30 minutes. Check with request_status."
+  request_status:
+    tier: read
+    agents: [coder]
+    backend: approvals
+    description: "Status of one of your approval requests: pending, executed, failed, denied or expired, with the result once it ran."
+    args:
+      id:
+        type: string
+        pattern: "^r-[0-9a-f]{12}$"
+        required: true
+        description: "The request id an approve tool returned, e.g. r-0123456789ab"
