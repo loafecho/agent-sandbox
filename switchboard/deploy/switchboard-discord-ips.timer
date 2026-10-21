@@ -1,0 +1,9 @@
+[Unit]
+Description=Refill nft set discord4 every 10 minutes
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

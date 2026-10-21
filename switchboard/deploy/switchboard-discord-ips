@@ -1,0 +1,10 @@
+#!/bin/sh
+# Refill the nft set `inet switchboard discord4` with discord.com's IPv4 addresses, in one atomic
+# transaction (flush + add). Run as root by switchboard-discord-ips.timer every 10 minutes and after
+# every firewall reload. Resolves three times and keeps the union, since DNS may rotate answers.
+# Repo: loafecho/agent-sandbox switchboard/deploy/.
+set -eu
+ips=$(for _ in 1 2 3; do getent ahostsv4 discord.com; done | awk '{print $1}' | grep -E '^[0-9]+(\.[0-9]+){3}$' | sort -u | tr '\n' ',' | sed 's/,$//')
+[ -n "$ips" ] || { echo "discord.com did not resolve; set left as it was" >&2; exit 1; }
+printf 'flush set inet switchboard discord4\nadd element inet switchboard discord4 { %s }\n' "$ips" | nft -f -
+echo "discord4: $(echo "$ips" | tr ',' '\n' | wc -l) address(es)"

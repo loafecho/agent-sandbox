@@ -1,0 +1,8 @@
+[Unit]
+Description=Refill nft set discord4 (discord.com IPv4s) for the switchboard's approvals
+After=nftables.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/switchboard-discord-ips

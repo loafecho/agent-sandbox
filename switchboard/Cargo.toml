@@ -1,0 +1,30 @@
+[package]
+name = "switchboard"
+version = "0.4.0"
+edition = "2021"
+description = "switchboard: the one MCP tool server every OpenShell box reaches through its own provider"
+publish = false
+
+[dependencies]
+tiny_http = "0.12"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2"
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+getrandom = "0.2"
+base64 = "0.22"
+
+[features]
+# Test-only build for dev machines and CI: RP localhost, fake Discord/ntfy/backends. install.sh refuses it.
+staging = []
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

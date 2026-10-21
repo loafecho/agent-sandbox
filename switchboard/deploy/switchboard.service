@@ -1,0 +1,31 @@
+[Unit]
+Description=switchboard (MCP tool server for OpenShell boxes; repo loafecho/agent-sandbox switchboard/)
+After=network-online.target nftables.service switchboard-discord-ips.service tailscaled.service
+Wants=network-online.target switchboard-discord-ips.service
+
+[Service]
+User=switchboard
+Group=switchboard
+# Backend keys (PVE_TOKEN_ID/SECRET, PVE_POWER_TOKEN_ID/SECRET, JELLYFIN_API_KEY, DISCORD_BOT_TOKEN; v0.4: one token per
+# upstream gateway, NTFY_TOKEN), root 0600, read by systemd before the drop to
+# the switchboard user. Written from the secrets manager by a separate root-only step.
+# v0.4 round 2: a systemd credential, not EnvironmentFile, so the keys never sit in /proc/<pid>/environ.
+LoadCredential=secrets.env:/etc/switchboard/secrets.env
+ExecStartPre=/usr/local/bin/switchboard check-config --config /etc/switchboard/config.json
+ExecStart=/usr/local/bin/switchboard serve --config /etc/switchboard/config.json
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/switchboard
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=yes
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
