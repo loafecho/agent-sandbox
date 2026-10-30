@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  switchboard:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: switchboard
+    env:
+      CARGO: cargo
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: python -m pip install pyyaml cryptography
+      - name: Format check (rustfmt)
+        run: cargo fmt --check
+      - name: Build
+        run: cargo build --locked
+      - name: Unit tests
+        run: cargo test --locked
+      - name: Every guard is load-bearing (mutation proof)
+        run: bash prove-red.sh
+      - name: Staging end-to-end (fake Discord, ntfy and backends; software passkey)
+        run: python staging/e2e.py
+      - name: Slow-body regression
+        run: python staging/loris.py
+      - name: Generated files match tools.yaml
+        run: python gen.py --check
+
+  repo:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python tools
+        run: python -m pip install pyyaml pytest ruff==0.15.15 yamllint
+      - name: Unit tests (pytest)
+        run: python -m pytest -q
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Lint (shellcheck)
+        run: |
+          mapfile -t scripts < <(git ls-files | xargs grep -lE '^#!.*\b(ba)?sh\b' 2>/dev/null)
+          printf '%s\n' "${scripts[@]}"
+          shellcheck -S warning "${scripts[@]}" boxes/coder/bin/lib.sh
+      - name: Lint (yamllint) policies, profiles and tools.yaml
+        run: yamllint switchboard/tools.yaml boxes/*/openshell/*.yaml .github/workflows
+      - name: Firewall rulesets parse (nft -c)
+        run: |
+          sudo apt-get install -y -qq nftables >/dev/null
+          for u in switchboard openshell openshell-jobs systemd-timesync; do
+            id "$u" >/dev/null 2>&1 || sudo useradd -r -s /usr/sbin/nologin "$u"
+          done
+          sudo nft -c -f switchboard/deploy/nftables.conf
+          bash gateways/jobs/install-jobs-wall.sh --render > "$RUNNER_TEMP/jobs-wall.nft"
+          sudo nft -c -f "$RUNNER_TEMP/jobs-wall.nft"
+          echo "both rulesets parse"
+      - name: Nothing in the repo would break a chat inside a box
+        run: python boxes/coder/bin/placeholder-scan.py .

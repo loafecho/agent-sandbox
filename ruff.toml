@@ -1,0 +1,5 @@
+line-length = 160
+
+[lint]
+# Default rule set (pyflakes + pycodestyle errors). Compact one-line imports and short lambdas are house style here.
+ignore = ["E401", "E731", "E741"]
