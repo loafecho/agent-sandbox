@@ -40,8 +40,9 @@ KEEP_RUNS = 50
 # (`homebot ask` = read, `homebot do` = change), never by the task text or the model. Claude Code runs headless with no
 # permission prompt, so a tool missing from --allowedTools is refused, and the box has no shell to change the flags.
 # Names are HA Assist API tools; one HA does not offer is simply never called, and a new HA tool stays off until
-# it is listed here (fail closed). Not listed on purpose: covers/positions (garage door), locks, alarm, vacuums,
-# timers, broadcast, list edits.
+# it is listed here (fail closed). Not listed on purpose: cover positions, locks, alarm, vacuums, timers, broadcast,
+# list edits. HassTurnOn/HassTurnOff also open and close any cover exposed to Assist, so the garage door, locks and
+# alarm must stay unexposed in HA: exposure, not this list, is what keeps them out of reach.
 READ_TOOLS = ("GetLiveContext", "GetDateTime", "HassGetState", "HassGetWeather", "HassClimateGetTemperature",
               "todo_get_items", "calendar_get_events")
 CHANGE_TOOLS = ("HassTurnOn", "HassTurnOff", "HassLightSet", "HassClimateSetTemperature", "HassFanSetSpeed",
