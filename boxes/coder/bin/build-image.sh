@@ -34,9 +34,13 @@ echo "$SHA  coder-box_${TAG}.tar" > "$TAR.sha256"
 echo "exported $TAR ($(stat -c %s "$TAR" | numfmt --to=iec)) sha256 $SHA"
 
 if ((WRITE)); then
-  scp -q "${SSH_OPTS[@]}" "$TAR" "$AGENT_HOST:/tmp/coder-box_${TAG}.tar"
-  hsh "set -e; f=/tmp/coder-box_${TAG}.tar; echo '$SHA  '\$f | sha256sum -c - >/dev/null
-       sudo install -o openshell -g openshell -m 640 \$f /var/lib/openshell/images/coder-box_${TAG}.tar; rm -f \$f
+  # Staged in a fresh 0700 directory, never a fixed /tmp name another local account could create first and swap
+  # between the checksum and the install.
+  D="$(hsh 'mktemp -d /tmp/coder-box-XXXXXX')"
+  [[ "$D" == /tmp/coder-box-* ]] || { echo "FAIL: no staging directory on agent-host"; exit 1; }
+  scp -q "${SSH_OPTS[@]}" "$TAR" "$AGENT_HOST:$D/coder-box_${TAG}.tar"
+  hsh "set -e; f=$D/coder-box_${TAG}.tar; echo '$SHA  '\$f | sha256sum -c - >/dev/null
+       sudo install -o openshell -g openshell -m 640 \$f /var/lib/openshell/images/coder-box_${TAG}.tar; rm -rf $D
        sudo -u openshell sh -c 'cd /var/lib/openshell/images && { grep -v \" coder-box_${TAG}.tar\$\" SHA256SUMS 2>/dev/null; echo \"$SHA  coder-box_${TAG}.tar\"; } > SHA256SUMS.new && mv SHA256SUMS.new SHA256SUMS && sha256sum -c SHA256SUMS'"
   echo "copied to agent-host:/var/lib/openshell/images/coder-box_${TAG}.tar"
   # Shipped and verified: drop the local copies. This script rebuilds them.

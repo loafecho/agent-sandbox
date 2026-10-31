@@ -195,6 +195,20 @@ def main():
         s, r = http("GET", WEB_PORT, f"/r/{rid4}", headers={"X-Forwarded-For": "198.51.100.25"})
         s2, r2 = http("POST", WEB_PORT, f"/r/{rid4}/options", {"decision": "approve"}, {"Origin": ORIGIN, "X-Forwarded-For": "198.51.100.25"})
         check("a caller that is not the phone gets 403", s == 403 and s2 == 403, f"GET {s}, POST {s2}")
+        # 6. a second X-Forwarded-For line is not ignored, and a forged huge Content-Length does not take the page down
+        import socket
+        def raw(head):
+            with socket.create_connection(("127.0.0.1", WEB_PORT), timeout=3) as c:
+                c.sendall(head.encode())
+                try:
+                    return c.recv(64).decode(errors="replace").split("\r\n")[0]
+                except OSError:
+                    return "no reply"
+        dup = raw(f"GET /r/{rid4} HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 127.0.0.1\r\nx-forwarded-for: 198.51.100.25\r\nConnection: close\r\n\r\n")
+        check("duplicate X-Forwarded-For lines get 403", " 403" in dup, dup)
+        huge = raw(f"POST /r/{rid4}/options HTTP/1.1\r\nHost: x\r\nOrigin: {ORIGIN}\r\nContent-Length: 1000000000000000\r\n\r\n")
+        s, _ = http("GET", WEB_PORT, "/enroll")
+        check("a forged huge Content-Length is refused and the page still answers", srv.poll() is None and s == 200, f"{huge}; then GET /enroll {s}")
         v = subprocess.run([BIN, "audit-verify", "--log", work / "audit.jsonl"], capture_output=True, text=True).stdout.strip()
         check("audit chain", v.startswith("AUDIT-VERIFY: chain OK"), v)
     finally:

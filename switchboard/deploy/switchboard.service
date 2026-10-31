@@ -15,6 +15,8 @@ ExecStartPre=/usr/local/bin/switchboard check-config --config /etc/switchboard/c
 ExecStart=/usr/local/bin/switchboard serve --config /etc/switchboard/config.json
 Restart=always
 RestartSec=2
+# A fixed descriptor budget; when it runs out the server exits and is restarted here (main.rs accept_died).
+LimitNOFILE=4096
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

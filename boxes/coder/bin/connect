@@ -2,6 +2,9 @@
 # The operator's line: an interactive shell inside the box `coder` (needs a real terminal).
 # Used for the things only the operator does in the box: `claude` then /login, the folder-trust prompt,
 # the one-time Remote Control prompt. Leave with `exit`; the box keeps running.
+# The shell reads /opt/coder/profile.sh only, never the agent-writable ~/.bash_profile, ~/.profile or ~/.bashrc.
+# Start Claude Code as /usr/local/bin/claude: ~/.local/bin comes first on PATH and the agent can write there.
+# Anything printed in the box reaches this terminal, so treat it as untrusted output.
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 . "$HERE/bin/lib.sh"
-exec ssh -t "${SSH_OPTS[@]}" "$AGENT_HOST" "sudo -u openshell -H sh -c 'cd && exec openshell sandbox exec -n coder --tty --timeout 0 --workdir /home/coder/work -- bash -l'"
+exec ssh -t "${SSH_OPTS[@]}" "$AGENT_HOST" "sudo -u openshell -H sh -c 'cd && exec openshell sandbox exec -n coder --tty --timeout 0 --workdir /home/coder/work -- bash --noprofile --rcfile /opt/coder/profile.sh -i'"

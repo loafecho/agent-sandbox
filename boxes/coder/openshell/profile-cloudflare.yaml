@@ -1,7 +1,7 @@
 id: cloudflare
 resource_version: 1
 display_name: Cloudflare
-description: Cloudflare API (Pages), scoped to the example-site project for writes
+description: Cloudflare API (Pages), writes limited to deployments of the example-site project
 category: other
 credentials:
   - name: api_token
@@ -24,15 +24,13 @@ endpoints:
       - allow:
           method: HEAD
           path: "**"
+      # Deployments only. No PATCH: project settings (env vars, Functions bindings) stay an operator change.
       - allow:
           method: POST
-          path: /client/v4/accounts/*/pages/projects/example-site/**
+          path: /client/v4/accounts/*/pages/projects/example-site/deployments
       - allow:
-          method: PATCH
-          path: /client/v4/accounts/*/pages/projects/example-site
-      - allow:
-          method: PATCH
-          path: /client/v4/accounts/*/pages/projects/example-site/**
+          method: POST
+          path: /client/v4/accounts/*/pages/projects/example-site/deployments/**
       - allow:
           method: DELETE
           path: /client/v4/accounts/*/pages/projects/example-site/deployments/*

@@ -20,9 +20,12 @@ LOG="$OUT/login.log"
 echo
 echo "Claude Code is starting inside the box, in the work folder. Accept the folder trust prompt, then /login, then /exit."
 echo
-ssh -t "${SSH_OPTS[@]}" "$AGENT_HOST" "sudo -u openshell -H sh -c 'cd && exec openshell sandbox exec -n coder --tty --timeout 0 --workdir /home/coder/work -- bash -lc claude'" || true
+ssh -t "${SSH_OPTS[@]}" "$AGENT_HOST" "sudo -u openshell -H sh -c 'cd && exec openshell sandbox exec -n coder --tty --timeout 0 --workdir /home/coder/work -- bash --noprofile --norc -c '\''. /opt/coder/profile.sh; exec /usr/local/bin/claude'\'''" || true
 # Result for the agent, without any secret: does a login file exist, and does a model call work?
+# The real claude by full path (the agent can write ~/.local/bin, first on PATH); control bytes from the box are
+# dropped before they reach this terminal.
 {
-  box coder 'test -s ~/.claude/.credentials.json && echo "login file: present" || echo "login file: missing"; cd ~/work && timeout 60 claude -p "Reply with the single word OK" 2>&1 | tail -1' 120
+  box coder 'test -s ~/.claude/.credentials.json && echo "login file: present" || echo "login file: missing"; cd ~/work && timeout 60 /usr/local/bin/claude -p "Reply with the single word OK" 2>&1 | tail -1' 120 \
+    | tr -d '\000-\010\013-\037\177'
   echo "done $(date -u +%FT%TZ)"
 } 2>&1 | tee -a "$LOG"

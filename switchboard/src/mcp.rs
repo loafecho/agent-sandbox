@@ -24,6 +24,8 @@ pub const MAX_BATCH: usize = 8;
 
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26"];
 pub const MAX_BODY: usize = 64 * 1024;
+/// Audited `args` longer than this (the forward-tier args cap) are kept as sha256 and length only.
+const AUDIT_ARGS_MAX: usize = 8 * 1024;
 
 pub struct Switchboard {
     pub cfg: Config,
@@ -174,6 +176,8 @@ impl Switchboard {
     fn call(&self, agent: &str, tool: &str, args: &Value) -> Value {
         let t0 = Instant::now();
         let forward = self.cfg.tools.get(tool).map(|t| t.tier == "forward").unwrap_or(false);
+        // Every call counts toward the rate limit, refused ones too: each one writes an audit line.
+        let rated = self.rate.check(&self.cfg, agent);
         let checked = guards::tool_allowed(&self.cfg, agent, tool)
             .and_then(|_| {
                 if forward {
@@ -182,7 +186,7 @@ impl Switchboard {
                     guards::args(&self.cfg, tool, args)
                 }
             })
-            .and_then(|_| self.rate.check(&self.cfg, agent));
+            .and(rated);
         let refused = |why: String| json!({"content": [{"type": "text", "text": why}], "isError": true});
         let (result, backend) = match checked {
             Err(d) => (refused(format!("refused: {}", d.why)), None),
@@ -205,6 +209,14 @@ impl Switchboard {
         // keeps its sha256 and length, not the text (SEC-4, round 2). Refusals stay readable.
         let mut ev = json!({"event": "tool", "agent": agent, "tool": tool, "args": args, "backend": backend,
                             "is_error": is_error, "ms": t0.elapsed().as_millis() as u64});
+        // Arguments over the forward-tier cap are kept as sha256 and length, so a refused call cannot grow the log
+        // by up to a whole request body per line.
+        let args_text = args.to_string();
+        if args_text.len() > AUDIT_ARGS_MAX {
+            ev["args"] = Value::Null;
+            ev["args_sha256"] = json!(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(args_text.as_bytes())));
+            ev["args_len"] = json!(args_text.len());
+        }
         if backend.is_some() {
             ev["result_sha256"] = json!(hex::encode(<sha2::Sha256 as sha2::Digest>::digest(full.as_bytes())));
             ev["result_len"] = json!(full.len());
@@ -586,6 +598,19 @@ mod tests {
         let r = call(&s, AGENT_HOST_IP, AUTH, "guest_list", json!({}));
         assert!(is_error(&r));
         assert!(r.body.unwrap().contains("rate limit"));
+    }
+
+    #[test]
+    fn refused_calls_count_toward_the_rate_limit_and_big_args_are_hashed() {
+        let s = sb(3);
+        let junk = "x".repeat(20_000);
+        for _ in 0..3 {
+            assert!(is_error(&call(&s, AGENT_HOST_IP, AUTH, "no_such_tool", json!({"pad": junk}))));
+        }
+        let r = call(&s, AGENT_HOST_IP, AUTH, "guest_list", json!({}));
+        assert!(r.body.unwrap().contains("rate limit"));
+        let log = std::fs::read_to_string(s.audit.path()).unwrap();
+        assert!(!log.contains(&junk) && log.contains("\"args_len\":20010"), "{}", &log[..300.min(log.len())]);
     }
 
     #[test]
@@ -1031,6 +1056,25 @@ mod tests {
         assert_eq!(web::handle(&s, &v6, "GET", &format!("/r/{id}"), None, b"", now).status, 200);
         assert_eq!(passkey(&s, &soft, &id, "approve")["status"], "executed");
         assert_eq!(w.lock().unwrap().writes.len(), 1);
+    }
+
+    #[test]
+    fn the_page_refuses_on_headers_before_reading_a_body() {
+        let (s, _w, _soft) = sbweb();
+        let pre = |xff: Option<&str>, method: &str, declared: Option<usize>| {
+            web::prebody(&s, &web::Caller { xff, peer: "127.0.0.1" }, method, "/r/r-000000000000/options", declared)
+        };
+        // Not the phone: refused before the body, whatever it declares.
+        assert_eq!(pre(Some("198.51.100.25"), "POST", Some(1 << 60)), Some(403));
+        // Two X-Forwarded-For lines arrive joined (main.rs header_all): refused in either order.
+        assert_eq!(pre(Some("198.51.100.24, 198.51.100.25"), "GET", None), Some(403));
+        assert_eq!(pre(Some("198.51.100.25, 198.51.100.24"), "GET", None), Some(403));
+        // The phone, but a declared body the page would refuse anyway.
+        assert_eq!(pre(Some("198.51.100.24"), "POST", Some(1 << 60)), Some(413));
+        assert_eq!(pre(Some("198.51.100.24"), "GET", Some(10)), Some(400));
+        // The phone, a normal request: read on.
+        assert_eq!(pre(Some("198.51.100.24"), "POST", Some(100)), None);
+        assert_eq!(pre(Some("198.51.100.24"), "GET", None), None);
     }
 
     /// A switchboard with the web page on and one soft passkey enrolled through the real enroll route.

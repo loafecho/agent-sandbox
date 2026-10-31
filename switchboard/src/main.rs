@@ -37,10 +37,16 @@ const REAPERS: usize = 4;
 /// Extra one-off threads that may drop refused requests when the reaper queue is full.
 const MAX_OVERFLOW_DROPS: usize = 256;
 static OVERFLOW: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// A refused request that declares a body bigger than this is never dropped (see `leak`).
+const DRAIN_MAX: usize = 1 << 20;
+/// Requests abandoned by `leak`; at this many the process exits so systemd restarts it with clean sockets.
+const MAX_LEAKS: usize = 256;
+static LEAKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// NO socket timeouts: SO_RCVTIMEO on the listener also times out accept(), and tiny_http's accept loop
 /// stops for good on the first accept error (lib.rs: `break`), so the server went deaf after 300 idle
-/// seconds (found 2026-10-21). Slow bodies are handled by never dropping a refused request on a worker.
+/// seconds (found 2026-10-21). Slow bodies are handled by never dropping a refused request on a worker;
+/// a dead accept loop (fd exhaustion) exits the process (`accept_died`, `exit_on_server_panic`).
 fn listen(addr: &str) -> Result<tiny_http::Server, String> {
     tiny_http::Server::http(addr).map_err(|e| e.to_string())
 }
@@ -48,6 +54,9 @@ fn listen(addr: &str) -> Result<tiny_http::Server, String> {
 /// Hand a refused request off a worker: to a reaper, or when they are all busy, to a one-off thread.
 fn refuse(reap: &std::sync::mpsc::SyncSender<(tiny_http::Request, u16)>, req: tiny_http::Request, status: u16) {
     use std::sync::atomic::Ordering;
+    if req.body_length().map_or(false, |n| n > DRAIN_MAX) {
+        return leak(req);
+    }
     match reap.try_send((req, status)) {
         Ok(()) => {}
         Err(std::sync::mpsc::TrySendError::Full((req, st)) | std::sync::mpsc::TrySendError::Disconnected((req, st))) => {
@@ -59,10 +68,43 @@ fn refuse(reap: &std::sync::mpsc::SyncSender<(tiny_http::Request, u16)>, req: ti
             } else {
                 OVERFLOW.fetch_sub(1, Ordering::SeqCst);
                 // Past every bound: leak the socket rather than block a worker on its body.
-                std::mem::forget(req);
+                leak(req);
             }
         }
     }
+}
+
+/// Abandon a request without dropping it. tiny_http's EqualReader::drop allocates `vec![0; remaining]` for the
+/// whole declared Content-Length before it reads a byte, so dropping a request that declares a huge body aborts
+/// the process. A leaked request holds its socket, so leaks are bounded: at MAX_LEAKS the process exits and
+/// systemd (Restart=always) starts it again with clean sockets.
+fn leak(req: tiny_http::Request) {
+    std::mem::forget(req);
+    if LEAKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 >= MAX_LEAKS {
+        eprintln!("switchboard: {MAX_LEAKS} abandoned connections; exiting so systemd restarts it");
+        std::process::exit(1);
+    }
+}
+
+/// tiny_http's accept loop stops for good on its first accept error (EMFILE, ECONNABORTED, ...) and hands that
+/// error to `recv()`; nothing else makes `recv()` fail here. The listener is deaf from then on, so exit and let
+/// systemd (Restart=always) bring it back instead of idling forever.
+fn accept_died(e: &std::io::Error) -> ! {
+    eprintln!("switchboard: accept loop stopped ({e}); exiting so systemd restarts it");
+    std::process::exit(1)
+}
+
+/// A panic inside tiny_http (its accept thread unwraps `try_clone()`, which fails on EMFILE) leaves `recv()`
+/// blocked forever with no error. Exit instead, so systemd restarts the process.
+fn exit_on_server_panic() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default(info);
+        if info.location().map_or(false, |l| l.file().contains("tiny_http")) {
+            eprintln!("switchboard: the HTTP server thread panicked; exiting so systemd restarts it");
+            std::process::exit(1);
+        }
+    }));
 }
 
 /// Requests refused before their body was read. tiny_http drains the rest of the body when a request is
@@ -300,6 +342,7 @@ fn backends(cfg: &config::Config) -> Result<tools::Backends, String> {
 }
 
 fn serve(path: &str) -> i32 {
+    exit_on_server_panic();
     load_credentials();
     let cfg = match config::Config::load(path) {
         Ok(c) => c,
@@ -409,27 +452,27 @@ fn serve(path: &str) -> i32 {
             p.poll(approve::now_secs());
         });
     }
+    let reap = reaper();
     if let Some(ws) = web_server {
         for _ in 0..WEB_THREADS {
-            let (ws, sb) = (ws.clone(), sb.clone());
+            let (ws, sb, reap) = (ws.clone(), sb.clone(), reap.clone());
             std::thread::spawn(move || loop {
                 match ws.recv() {
-                    Ok(req) => web_one(&sb, req),
-                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                    Ok(req) => web_one(&sb, req, &reap),
+                    Err(e) => accept_died(&e),
                 }
             });
         }
         eprintln!("switchboard web page on {}", sb.cfg.web.as_ref().map(|w| w.listen.as_str()).unwrap_or(""));
     }
     eprintln!("switchboard {} ({BUILD}) listening on {}", env!("CARGO_PKG_VERSION"), sb.cfg.listen);
-    let reap = reaper();
     let workers: Vec<_> = (0..MCP_THREADS)
         .map(|_| {
             let (server, sb, reap) = (server.clone(), sb.clone(), reap.clone());
             std::thread::spawn(move || loop {
                 match server.recv() {
                     Ok(req) => mcp_one(&sb, req, &reap),
-                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+                    Err(e) => accept_died(&e),
                 }
             })
         })
@@ -442,6 +485,17 @@ fn serve(path: &str) -> i32 {
 
 fn header(req: &tiny_http::Request, name: &'static str) -> Option<String> {
     req.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str().to_string())
+}
+
+/// Every line of a header, joined with ", ". A repeated X-Forwarded-For line then reads as a second address,
+/// which guards::web_device refuses, instead of the first line silently winning.
+fn header_all(req: &tiny_http::Request, name: &'static str) -> Option<String> {
+    let v: Vec<&str> = req.headers().iter().filter(|h| h.field.equiv(name)).map(|h| h.value.as_str()).collect();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.join(", "))
+    }
 }
 
 fn mcp_one(sb: &mcp::Switchboard, mut req: tiny_http::Request, reap: &std::sync::mpsc::SyncSender<(tiny_http::Request, u16)>) {
@@ -470,18 +524,23 @@ fn mcp_one(sb: &mcp::Switchboard, mut req: tiny_http::Request, reap: &std::sync:
     let _ = req.respond(resp);
 }
 
-fn web_one(sb: &mcp::Switchboard, mut req: tiny_http::Request) {
+fn web_one(sb: &mcp::Switchboard, mut req: tiny_http::Request, reap: &std::sync::mpsc::SyncSender<(tiny_http::Request, u16)>) {
     let origin = header(&req, "Origin");
-    let xff = header(&req, "X-Forwarded-For");
+    let xff = header_all(&req, "X-Forwarded-For");
     let peer = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     let method = req.method().as_str().to_string();
     let path = req.url().to_string();
-    let mut body = Vec::new();
-    let _ = req.as_reader().take((web::MAX_WEB_BODY + 1) as u64).read_to_end(&mut body);
     let caller = web::Caller {
         xff: xff.as_deref(),
         peer: &peer,
     };
+    // Headers only, before any of the body is read: a caller that is not the phone, or a declared body the page
+    // would refuse anyway, never holds one of the two web workers or reaches tiny_http's drain on drop.
+    if let Some(status) = web::prebody(sb, &caller, &method, &path, req.body_length()) {
+        return refuse(reap, req, status);
+    }
+    let mut body = Vec::new();
+    let _ = req.as_reader().take((web::MAX_WEB_BODY + 1) as u64).read_to_end(&mut body);
     let r = web::handle(sb, &caller, &method, &path, origin.as_deref(), &body, approve::now_secs());
     let h = |s: String| s.parse::<tiny_http::Header>().unwrap();
     let resp = tiny_http::Response::from_string(r.body)

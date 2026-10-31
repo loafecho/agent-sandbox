@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FWD-1 regression (slow-body hardening): 16 sockets with no token send a request line and a partial body, then
+"""FWD-1 regression (slow-body hardening), plus a forged huge Content-Length and fd exhaustion: 16 sockets with no token send a request line and a partial body, then
 go quiet. A valid call must still answer within 5 s. Runs the staging build on 127.0.0.1:28800 in a temp dir.
 Prints LORIS ok|FAIL and exits 0 only on ok."""
 import hashlib, json, os, signal, socket, subprocess, sys, tempfile, time, urllib.request
@@ -67,6 +67,53 @@ try:
     ok = ok and ok3
     for s in socks:
         s.close()
+    # 4. a token-less request declaring an absurd body (tiny_http's drop-time drain would allocate all of it)
+    s = socket.create_connection(("127.0.0.1", 28800))
+    s.sendall(b"POST /mcp HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000000000000\r\n\r\n")
+    time.sleep(1)
+    try:
+        with urllib.request.urlopen(req, timeout=8) as f:
+            ok4 = srv.poll() is None and f.status == 200
+    except Exception:  # noqa: BLE001
+        ok4 = False
+    print(f"LORIS {'ok' if ok4 else 'FAIL'}: a forged 1 PB Content-Length {'left the server answering' if ok4 else 'took the server down'}")
+    ok = ok and ok4
+    s.close()
 finally:
     os.killpg(srv.pid, signal.SIGTERM)
+    srv.wait(timeout=10)
+
+# 5. file descriptors run out (idle connections under a low RLIMIT_NOFILE): tiny_http's accept loop dies on the
+# first accept error, which used to leave a live but deaf process. It must exit (systemd restarts it) or still answer.
+import resource  # noqa: E402
+srv = subprocess.Popen([BIN, "serve", "--config", work / "config.json"], stderr=subprocess.DEVNULL, start_new_session=True,
+                       preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (48, 48)))
+try:
+    time.sleep(1)
+    socks = []
+    for _ in range(64):
+        try:
+            socks.append(socket.create_connection(("127.0.0.1", 28800), timeout=2))
+        except OSError:
+            break
+    time.sleep(2)
+    for s in socks:
+        s.close()
+    time.sleep(1)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as f:
+            answered = f.status == 200
+    except Exception:  # noqa: BLE001
+        answered = False
+    try:
+        srv.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        pass
+    ok5 = answered or srv.poll() is not None
+    state = "still answers" if answered else (f"exited rc={srv.returncode}" if srv.poll() is not None else "alive but deaf")
+    print(f"LORIS {'ok' if ok5 else 'FAIL'}: after fd exhaustion the server {state}")
+    ok = ok and ok5
+finally:
+    if srv.poll() is None:
+        os.killpg(srv.pid, signal.SIGTERM)
 sys.exit(0 if ok else 1)

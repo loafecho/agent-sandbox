@@ -106,6 +106,23 @@ pub struct Caller<'a> {
     pub peer: &'a str,
 }
 
+/// The checks that need only the headers, run before any of the body is read: the device gate, then the
+/// declared body size (bigger than MAX_WEB_BODY, or any body on a non-POST). Some(status) = refuse now; the
+/// refusal is audited as `web_refused`. `declared` is the request's Content-Length, if it sent one.
+pub fn prebody(sb: &Switchboard, caller: &Caller, method: &str, path: &str, declared: Option<usize>) -> Option<u16> {
+    let web = sb.web.as_ref()?;
+    let path = path.split('?').next().unwrap_or("");
+    let (status, why) = match guards::web_device(&web.cfg.allow_src, caller.xff, caller.peer) {
+        Err(d) => (403, d.why),
+        Ok(()) if declared.map_or(false, |n| n > MAX_WEB_BODY) => (413, "body too large".to_string()),
+        Ok(()) if method != "POST" && declared.map_or(false, |n| n > 0) => (400, format!("a body on {method}")),
+        Ok(()) => return None,
+    };
+    sb.audit
+        .record(json!({"event": "web_refused", "why": why, "path": path, "from": caller.xff.unwrap_or(caller.peer)}));
+    Some(status)
+}
+
 /// One web request. `origin` is the request's Origin header (POSTs must carry ours).
 pub fn handle(sb: &Switchboard, caller: &Caller, method: &str, path: &str, origin: Option<&str>, body: &[u8], now: u64) -> WebReply {
     let Some(web) = sb.web.as_ref() else { return jerr(404, "not found") };

@@ -77,6 +77,25 @@ def scrub(text: str) -> str:
     return re.sub(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+", "<scrubbed-jwt>", text)
 
 
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean(text: str) -> str:
+    """Box output on its way to the operator's terminal: scrubbed, no control characters but newline and tab,
+    and no line that passes for this script's own framing (an answer line starting `<<<` or `[homebot rc=`)."""
+    text = CONTROL.sub("", scrub(text))
+    return re.sub(r"(?m)^(?=<<<|\[homebot rc=)", "  ", text)
+
+
+def answer(out: str) -> str:
+    """The text to emit for one run: the answer between BEGIN and the LAST END marker (an END the model prints
+    itself cannot end the answer early or supply the rc), cleaned, then the rc line."""
+    m = re.search(r"<<<HOMEBOT-BEGIN>>>\n(.*)<<<HOMEBOT-END rc=(\d+)>>>", out, re.S)
+    if not m:
+        return clean(out) + "\n"
+    return clean(m.group(1)).strip() + f"\n[homebot rc={m.group(2)}]\n"
+
+
 def osh(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(["openshell", *args], capture_output=True, text=True, timeout=timeout,
                           start_new_session=True, cwd=HOME)
@@ -163,8 +182,7 @@ def main() -> int:
         (run / "box-output.log").write_text(scrub(out))
         (run / "result.txt").write_text(f"box rc={rc}\n")
         prune()
-    m = re.search(r"<<<HOMEBOT-BEGIN>>>\n(.*?)<<<HOMEBOT-END rc=(\d+)>>>", out, re.S)
-    emit((m.group(1).strip() + f"\n[homebot rc={m.group(2)}]\n") if m else scrub(out) + "\n")
+    emit(answer(out))
     emit(hosts(log))
     return 0 if rc == 0 else 1
 
