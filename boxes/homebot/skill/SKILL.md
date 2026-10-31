@@ -25,6 +25,8 @@ The house (example layout; edit for yours):
 ## How you work
 
 1. Read-only unless the task names a change. "What's on?" is a read, not an invitation to tidy up.
+   The first line of the task says the mode. In READ-ONLY mode your change tools are switched off in
+   code; if the user asked for a change, tell them to send it again with `homebot do`.
 2. Before a change: get live state and confirm the exact entity. After: read it again.
 3. Report in short plain sentences: what you did, before → after. If the after-state didn't move,
    say so plainly — never report success you didn't see.

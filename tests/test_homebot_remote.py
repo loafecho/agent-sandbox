@@ -26,8 +26,48 @@ def test_hosts_trailer_when_nothing_was_logged():
 def test_box_runs_with_no_builtin_tools_and_only_the_ha_server():
     assert '--tools ""' in hr.INNER
     assert "--strict-mcp-config" in hr.INNER
-    assert '--allowedTools "mcp__home-assistant"' in hr.INNER
     assert hr.MAX_TASK == 4096
+
+
+WRITES = ("HassTurnOn", "HassTurnOff", "HassLightSet", "HassClimateSetTemperature")
+NEVER = ("HassSetPosition", "HassVacuumStart", "HassBroadcast", "HassListAddItem")
+
+
+def test_only_exact_homebot_do_is_change_mode():
+    assert hr.mode_of("homebot do") == "change"
+    assert hr.mode_of("  homebot   do ") == "change"
+    for cmd in ("", "homebot", "homebot ask", "homebot do now", "do", "homebot DO", "homebot; do", "homebot do\nx"):
+        assert hr.mode_of(cmd) == "read", cmd
+
+
+def test_no_server_wide_grant_in_any_mode():
+    for mode in hr.MODES:
+        tools = hr.allowed_tools(mode).split(",")
+        assert "mcp__home-assistant" not in tools
+        assert all(t.startswith("mcp__home-assistant__") for t in tools)
+
+
+def test_read_mode_has_no_write_tool():
+    tools = hr.allowed_tools("read").split(",")
+    assert "mcp__home-assistant__GetLiveContext" in tools
+    for t in WRITES + NEVER:
+        assert f"mcp__home-assistant__{t}" not in tools
+
+
+def test_change_mode_adds_listed_writes_only():
+    tools = hr.allowed_tools("change").split(",")
+    for t in WRITES:
+        assert f"mcp__home-assistant__{t}" in tools
+    for t in NEVER:
+        assert f"mcp__home-assistant__{t}" not in tools
+
+
+def test_inner_carries_the_mode_grant():
+    for mode in hr.MODES:
+        inner = hr.inner(mode)
+        assert "@ALLOWED@" not in inner
+        assert f'--allowedTools "{hr.allowed_tools(mode)}"' in inner
+    assert "HassTurnOn" not in hr.inner("read")
 
 
 def test_answer_strips_control_bytes_and_cannot_forge_framing():

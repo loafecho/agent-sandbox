@@ -3,6 +3,7 @@
 workstation's Homebot trigger key.
 
   stdin   the user's task, plain text (max 4 KB; empty = refusal, no box)
+  command `homebot do` = change mode (read tools + a short list of change tools); anything else = read-only tools
   stdout  Homebot's answer, then one trailer line: <<<NETWORK-HOSTS allowed=a,b denied=c>>>
   exit    0 = box ran, 2 = bad input, 3 = busy, 1 = box failed
 
@@ -35,15 +36,46 @@ MAX_TASK = 4096
 BOX_TIMEOUT = 300           # seconds for one Homebot task
 KEEP_RUNS = 50
 
+# Which Home Assistant tools a task may call is decided here, in code, by the mode the operator picked on the workstation
+# (`homebot ask` = read, `homebot do` = change), never by the task text or the model. Claude Code runs headless with no
+# permission prompt, so a tool missing from --allowedTools is refused, and the box has no shell to change the flags.
+# Names are HA Assist API tools; one HA does not offer is simply never called, and a new HA tool stays off until
+# it is listed here (fail closed). Not listed on purpose: covers/positions (garage door), locks, alarm, vacuums,
+# timers, broadcast, list edits.
+READ_TOOLS = ("GetLiveContext", "GetDateTime", "HassGetState", "HassGetWeather", "HassClimateGetTemperature",
+              "todo_get_items", "calendar_get_events")
+CHANGE_TOOLS = ("HassTurnOn", "HassTurnOff", "HassLightSet", "HassClimateSetTemperature", "HassFanSetSpeed",
+                "HassMediaPause", "HassMediaUnpause", "HassSetVolume")
+MODES = {
+    "read": (READ_TOOLS, "Mode: READ-ONLY. Change tools are switched off for this task. If the user asked for a change, "
+                         "say so and tell them to send it again with `homebot do`."),
+    "change": (READ_TOOLS + CHANGE_TOOLS, "Mode: CHANGE. The user sent this with `homebot do`; make only the change they named."),
+}
+
+
+def mode_of(command: str) -> str:
+    """The mode from the forced command's SSH_ORIGINAL_COMMAND. Only an exact `homebot do` is change; anything else
+    (old clients send `homebot`) is read."""
+    return "change" if command.split() == ["homebot", "do"] else "read"
+
+
+def allowed_tools(mode: str) -> str:
+    return ",".join(f"mcp__home-assistant__{t}" for t in MODES[mode][0])
+
+
 # MCP tools only: no built-in tools at all (no Bash, no files, no web). Skill appended to the prompt.
 INNER = r'''
 export HOME=/tmp DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 echo "<<<HOMEBOT-BEGIN>>>"
 claude -p --tools "" --mcp-config /opt/homebot/mcp.json --strict-mcp-config \
-  --allowedTools "mcp__home-assistant" --append-system-prompt-file /opt/homebot/SKILL.md \
+  --allowedTools "@ALLOWED@" --append-system-prompt-file /opt/homebot/SKILL.md \
   --output-format text < /sandbox/task.txt
 echo "<<<HOMEBOT-END rc=$?>>>"
 '''
+
+
+def inner(mode: str) -> str:
+    return INNER.replace("@ALLOWED@", allowed_tools(mode))
 
 
 class Hangup(Exception):
@@ -126,7 +158,9 @@ def main() -> int:
     ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     run = RUNS / ts
     run.mkdir(mode=0o700)
-    (run / "meta.txt").write_text(f"ssh_original_command_ignored={os.environ.get('SSH_ORIGINAL_COMMAND', '')!r}\n"
+    command = os.environ.get("SSH_ORIGINAL_COMMAND", "")
+    mode = mode_of(command)
+    (run / "meta.txt").write_text(f"ssh_original_command={command!r}\nmode={mode}\n"
                                   f"client={os.environ.get('SSH_CLIENT', '')}\n")
 
     task = sys.stdin.buffer.read(MAX_TASK + 1)
@@ -147,7 +181,7 @@ def main() -> int:
         emit("homebot-remote: Homebot is busy with another task\n")
         return 3
 
-    (run / "task.txt").write_text(text + "\n")
+    (run / "task.txt").write_text(f"[{MODES[mode][1]}]\n\n{text}\n")
     threading.Thread(target=watch_disconnect, daemon=True).start()
     sweep_stale()
     name = f"homebot-{ts[2:]}"                    # homebot-YYMMDD-HHMMSS = 18; OpenShell caps names at 19
@@ -161,7 +195,7 @@ def main() -> int:
         out = "[create]\n" + c.stdout + c.stderr
         if c.returncode == 0:
             r = osh("sandbox", "exec", "-n", name, "--no-tty", "--no-login-shell", "--timeout", str(BOX_TIMEOUT),
-                    "--", "bash", "-c", INNER, timeout=BOX_TIMEOUT + 60)
+                    "--", "bash", "-c", inner(mode), timeout=BOX_TIMEOUT + 60)
             out += "\n[exec]\n" + r.stdout + ("\n[stderr]\n" + r.stderr if r.stderr.strip() else "")
             rc = 0
     except subprocess.TimeoutExpired:

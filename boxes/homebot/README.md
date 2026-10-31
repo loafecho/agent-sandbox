@@ -10,7 +10,8 @@ Home Assistant's official MCP server (`/api/mcp`, Assist API, exposed entities o
 | `openshell/policy.yaml` | box policy: no network rules of its own; the two doors come from providers |
 | `openshell/profile-homebot-home-assistant.yaml` | provider profile: HA token bound to `POST /api/mcp` on one address only |
 | `bin/homebot-remote` | agent-host side: SSH forced command; boots, runs and deletes the box; keeps run records under `~/homebot/runs/` |
-| `bin/homebot` | workstation side: `homebot ask "…"`, `homebot chat` |
+| `bin/homebot` | workstation side: `homebot ask "…"` (read-only tools), `homebot do "…"` (read + change tools), `homebot chat [--do]` |
+| tool grant | `bin/homebot-remote` picks the HA tools per task from the mode (`READ_TOOLS`, `CHANGE_TOOLS`), never from the task text; unlisted tools (covers, locks, alarm, vacuums, timers) are refused |
 | `bin/set-homebot-tokens.sh` | the operator runs it: loads both tokens from the secrets manager into providers `homebot-ha`, `homebot-claude` |
 
 ## Why it is shaped this way
