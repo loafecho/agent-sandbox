@@ -24,8 +24,9 @@ Home Assistant's official MCP server (`/api/mcp`, Assist API, exposed entities o
   and new devices are hidden by default (`expose_new: false`).
 - **The trigger key can do one thing.** `restrict,from="<workstation>",command="/usr/local/bin/homebot-remote"`
   in `authorized_keys`: the key hands a task (max 4 KB of text) on stdin and nothing else. The forced command
-  ignores `SSH_ORIGINAL_COMMAND`, takes a lock (one task at a time), and deletes the box on every exit path,
-  including a dropped SSH connection.
+  reads `SSH_ORIGINAL_COMMAND` only to pick the mode (exactly `homebot do` is change mode; anything else is
+  read-only), takes a lock (one task at a time), and deletes the box on every exit path, including a dropped
+  SSH connection.
 - **Every run leaves a record**: the task, the box output (token-shaped strings scrubbed), and the network log,
   summarized as a `<<<NETWORK-HOSTS allowed=… denied=…>>>` trailer on every answer.
 
